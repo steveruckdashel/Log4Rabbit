@@ -3,13 +3,15 @@ using System.Diagnostics;
 using RabbitMQ.Client;
 using log4net.Core;
 using log4net.Util;
+using log4net.Layout;
+using System.Text;
+using System.IO;
 
 namespace log4net.Appender
 {
 	public class RabbitMQAppender : AppenderSkeleton
 	{
 		private ConnectionFactory _connectionFactory;
-		private XmlMessageBuilder _messageBuilder;
 		private WorkerThread<LoggingEvent> _worker;
 
 		public RabbitMQAppender()
@@ -84,8 +86,6 @@ namespace log4net.Appender
 
 		public override void ActivateOptions()
 		{
-			_messageBuilder = new XmlMessageBuilder();
-			_messageBuilder.ActivateOptions();
 			_connectionFactory = new ConnectionFactory {
 				HostName = HostName, 
 				VirtualHost = VirtualHost, 
@@ -102,19 +102,37 @@ namespace log4net.Appender
 			Stopwatch sw = Stopwatch.StartNew();
 			try
 			{
-				LogLog.Debug(typeof(RabbitMQAppender), string.Concat("publishing ", logs.Length, " logs"));
-				byte[] body = _messageBuilder.Build(logs);
-				using (IConnection connection = _connectionFactory.CreateConnection())
-				{
-					using (IModel model = connection.CreateModel())
-					{
-						IBasicProperties basicProperties = model.CreateBasicProperties();
-						basicProperties.ContentEncoding = _messageBuilder.ContentEncoding;
-						basicProperties.ContentType = _messageBuilder.ContentType;
-						basicProperties.DeliveryMode = 2;
-						model.BasicPublish(Exchange, RoutingKey, basicProperties, body);
-					}
-				}
+                byte[] body;
+                foreach (LoggingEvent loggingEvent in logs)
+                {
+                    var sb = new StringBuilder();
+                    using (var sr = new StringWriter(sb))
+                    {
+                        if (loggingEvent == null)
+                        {
+                            continue;
+                        }
+                        Layout.Format(sr, loggingEvent);
+
+                        if (loggingEvent.ExceptionObject != null)
+                            sr.Write(loggingEvent.GetExceptionString());
+
+                        body = Encoding.UTF8.GetBytes(sr.ToString());
+                    }
+				    using (IConnection connection = _connectionFactory.CreateConnection())
+				    {
+					    using (IModel model = connection.CreateModel())
+					    {
+						    IBasicProperties basicProperties = model.CreateBasicProperties();
+						    basicProperties.ContentType = Layout.ContentType;
+						    basicProperties.DeliveryMode = 2;
+						    model.BasicPublish(Exchange, RoutingKey, basicProperties, body);
+					    }
+				    }                
+                }
+
+
+
 			}
 			catch (Exception e)
 			{
